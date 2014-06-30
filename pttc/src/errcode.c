@@ -62,6 +62,10 @@ const char *errstr[] = {
 	"unknown directive",
 	"missing directive",
 
+	"no open sideband file",
+	"sideband format error",
+	"configuration error",
+
 	"pt library error",
 
 	"run failed",

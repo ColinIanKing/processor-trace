@@ -64,6 +64,10 @@ enum errcode {
 	err_parse_unknown_directive,
 	err_parse_missing_directive,
 
+	err_sb_missing,
+	err_sb_mix,
+	err_sb_final,
+
 	err_pt_lib,
 
 	err_run,

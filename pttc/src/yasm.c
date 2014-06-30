@@ -465,7 +465,8 @@ void pd_free(struct pt_directive *pd)
 	free(pd);
 }
 
-int pd_set(struct pt_directive *pd, const char *name, const char *payload)
+int pd_set(struct pt_directive *pd, enum pt_directive_kind kind,
+	   const char *name, const char *payload)
 {
 	if (bug_on(!pd))
 		return -err_internal;
@@ -476,6 +477,7 @@ int pd_set(struct pt_directive *pd, const char *name, const char *payload)
 	if (bug_on(!payload))
 		return -err_internal;
 
+	pd->kind = kind;
 	strncpy(pd->name, name, pd->nlen);
 	if (pd->nlen > 0)
 		pd->name[pd->nlen - 1] = '\0';
@@ -486,13 +488,14 @@ int pd_set(struct pt_directive *pd, const char *name, const char *payload)
 	return 0;
 }
 
-/* Magic annotation marker.  */
-const char *marker = "@pt ";
+/* Magic annotation markers.  */
+const char *pt_marker = "@pt ";
+const char *sb_marker = "@sb ";
 
 int pd_parse(struct pt_directive *pd, struct state *st)
 {
-	char *line, *comment, *ptdirective, *openpar, *closepar;
-	char *directive, *payload;
+	enum pt_directive_kind kind;
+	char *line, *comment, *openpar, *closepar, *directive, *payload;
 	int errcode;
 	char *c;
 
@@ -526,13 +529,23 @@ int pd_parse(struct pt_directive *pd, struct state *st)
 		goto cleanup;
 
 	/* search for @pt marker.  */
-	ptdirective = strstr(comment+1, marker);
+	directive = strstr(comment+1, pt_marker);
+	if (directive) {
+		directive += strlen(pt_marker);
+		kind = pdk_pt;
+	} else {
+		/* search for @sb marker. */
+		directive = strstr(comment+1, sb_marker);
+		if (directive) {
+			directive += strlen(sb_marker);
+			kind = pdk_sb;
+		} else
+			goto cleanup;
+	}
 
-	/* if there is no such marker in the comment, we don't have
-	 * anything to do.
-	 */
-	if (!ptdirective)
-		goto cleanup;
+	/* skip leading whitespace. */
+	while (isspace(*directive))
+		directive += 1;
 
 	/* directive found, now parse the payload.  */
 	errcode = 0;
@@ -540,7 +553,7 @@ int pd_parse(struct pt_directive *pd, struct state *st)
 	/* find position of next '(', separating the directive and the
 	 * payload.
 	 */
-	openpar = strchr(ptdirective, '(');
+	openpar = strchr(directive, '(');
 	if (!openpar) {
 		errcode = -err_missing_openpar;
 		st_print_err(st, "invalid syntax", errcode);
@@ -562,14 +575,9 @@ int pd_parse(struct pt_directive *pd, struct state *st)
 	*openpar = '\0';
 	*closepar = '\0';
 
-	/* skip leading whitespace. */
-	directive = ptdirective + strlen(marker);
-	while (isspace(*directive))
-		directive += 1;
-
 	payload = openpar+1;
 
-	errcode = pd_set(pd, directive, payload);
+	errcode = pd_set(pd, kind, directive, payload);
 
 cleanup:
 	free(line);
