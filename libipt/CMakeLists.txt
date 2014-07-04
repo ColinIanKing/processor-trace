@@ -56,6 +56,7 @@ set(LIBIPT_FILES
   src/pt_insn.c
   src/pt_block_decoder.c
   src/pt_block_cache.c
+  src/pt_observer.c
 )
 
 if (CMAKE_HOST_UNIX)
@@ -121,6 +122,7 @@ add_ptunit_std_test(sync src/pt_packet.c)
 add_ptunit_std_test(config)
 add_ptunit_std_test(image_section_cache)
 add_ptunit_std_test(block_cache)
+add_ptunit_std_test(observer)
 
 add_ptunit_c_test(mapped_section src/pt_asid.c)
 add_ptunit_c_test(query

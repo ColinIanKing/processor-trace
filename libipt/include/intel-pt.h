@@ -45,6 +45,7 @@ extern "C" {
  * - Version
  * - Opcodes
  * - Errors
+ * - Observers
  * - Configuration
  * - Packet encoder / decoder
  * - Query decoder
@@ -493,6 +494,64 @@ static inline enum pt_error_code pt_errcode(int status)
 
 /** Return a human readable error string. */
 extern pt_export const char *pt_errstr(enum pt_error_code);
+
+
+
+/* Observers. */
+
+
+
+/** An Intel PT decode observer.
+ *
+ * An observer may be attached to an Intel PT decoder to observe and influence
+ * the decoding process.
+ *
+ * The observer configuration may be modified during each callback, including:
+ *
+ *   - unsubscribing by setting the respective callback function to NULL
+ *   - subscribing to a new event type by adding a callback function
+ *   - update the callback configuration for any event type
+ */
+struct pt_observer {
+	/** The size of this object - set to sizeof(struct pt_observer). */
+	size_t size;
+
+	/** A user-defined context for this observer. */
+	void *context;
+
+	/** An optional callback for time-based observation. */
+	struct {
+		/* PRIVATE: The next observer. */
+		struct pt_observer *next;
+
+		/** The callback function.
+		 *
+		 * If non-NULL, the callback will be called when time changes.
+		 *
+		 * It shall return zero on success; a negative pt_error_code
+		 * otherwise.
+		 */
+		int (*callback)(struct pt_observer *self, uint64_t tsc,
+				uint32_t lost_mtc, uint32_t lost_cyc);
+
+		/** An optional time limit.
+		 *
+		 * The above \@callback will only be called when the current
+		 * time is greater than or equal to \@limit.
+		 *
+		 * Set to zero to be called for all time changes.
+		 */
+		uint64_t limit;
+	} tick;
+};
+
+/** Initialize an Intel PT decode observer. */
+static inline void pt_obsv_init(struct pt_observer *observer)
+{
+	memset(observer, 0, sizeof(*observer));
+
+	observer->size = sizeof(*observer);
+}
 
 
 
