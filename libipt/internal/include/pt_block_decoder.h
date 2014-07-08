@@ -32,6 +32,7 @@
 #include "pt_query_decoder.h"
 #include "pt_image.h"
 #include "pt_retstack.h"
+#include "pt_observer.h"
 
 struct pt_section;
 
@@ -90,6 +91,9 @@ struct pt_block_decoder {
 
 	/* The call/return stack for ret compression. */
 	struct pt_retstack retstack;
+
+	/* The attached decode observers. */
+	struct pt_obsv_collection observers;
 
 	/* The start IP of the next block.
 	 *

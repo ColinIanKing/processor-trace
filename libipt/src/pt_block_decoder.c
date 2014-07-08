@@ -168,6 +168,16 @@ int pt_blk_decoder_init(struct pt_block_decoder *decoder,
 
 	memset(&decoder->scache, 0, sizeof(decoder->scache));
 
+	pt_obsvc_init(&decoder->observers);
+
+	errcode = pt_time_attach_obsvc(&decoder->query.time,
+				       &decoder->observers);
+	if (errcode < 0) {
+		pt_blk_decoder_fini(decoder);
+
+		return errcode;
+	}
+
 	pt_blk_reset(decoder);
 
 	return 0;
@@ -181,6 +191,7 @@ void pt_blk_decoder_fini(struct pt_block_decoder *decoder)
 	/* Release the cached section so we don't leak it. */
 	(void) pt_blk_scache_invalidate(&decoder->scache);
 
+	pt_obsvc_fini(&decoder->observers);
 	pt_image_fini(&decoder->default_image);
 	pt_qry_decoder_fini(&decoder->query);
 }
@@ -300,6 +311,15 @@ int pt_blk_get_sync_offset(struct pt_block_decoder *decoder, uint64_t *offset)
 		return -pte_invalid;
 
 	return pt_qry_get_sync_offset(&decoder->query, offset);
+}
+
+int pt_blk_attach_obsv(struct pt_block_decoder *decoder,
+		       struct pt_observer *obsv)
+{
+	if (!decoder)
+		return -pte_invalid;
+
+	return pt_obsvc_add(&decoder->observers, obsv);
 }
 
 struct pt_image *pt_blk_get_image(struct pt_block_decoder *decoder)

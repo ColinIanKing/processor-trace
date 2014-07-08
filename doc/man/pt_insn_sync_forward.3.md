@@ -142,4 +142,4 @@ int foo(struct pt_insn_decoder *decoder) {
 **pt_insn_alloc_decoder**(3), **pt_insn_free_decoder**(3),
 **pt_insn_get_offset**(3), **pt_insn_get_sync_offset**(3),
 **pt_insn_get_config**(3), **pt_insn_time**(3), **pt_insn_core_bus_ratio**(3),
-**pt_insn_next**(3)
+**pt_insn_next**(3), **pt_insn_attach_obsv**(3)

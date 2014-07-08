@@ -337,4 +337,5 @@ pte_bad_query
 
 **pt_insn_alloc_decoder**(3), **pt_insn_free_decoder**(3),
 **pt_insn_sync_forward**(3), **pt_insn_sync_backward**(3),
-**pt_insn_sync_set**(3), **pt_insn_time**(3), **pt_insn_core_bus_ratio**(3)
+**pt_insn_sync_set**(3), **pt_insn_time**(3), **pt_insn_core_bus_ratio**(3),
+**pt_insn_attach_obsv**(3)

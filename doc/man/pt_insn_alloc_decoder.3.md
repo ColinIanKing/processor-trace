@@ -98,4 +98,5 @@ int foo(const struct pt_config *config) {
 **pt_config**(3), **pt_insn_sync_forward**(3), **pt_insn_sync_backward**(3),
 **pt_insn_sync_set**(3), **pt_insn_get_offset**(3), **pt_insn_get_sync_offset**(3),
 **pt_insn_get_image**(3), **pt_insn_set_image**(3), **pt_insn_get_config**(3),
-**pt_insn_time**(3), **pt_insn_core_bus_ratio**(3), **pt_insn_next**(3)
+**pt_insn_time**(3), **pt_insn_core_bus_ratio**(3), **pt_insn_next**(3),
+**pt_insn_attach_obsv**(3)

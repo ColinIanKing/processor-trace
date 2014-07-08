@@ -81,6 +81,7 @@ set(MAN3_FUNCTIONS
   pt_insn_get_offset
   pt_insn_get_image
   pt_insn_next
+  pt_insn_attach_obsv
   pt_iscache_alloc
   pt_iscache_add_file
   pt_iscache_read
@@ -133,6 +134,7 @@ add_man_page_alias(3 pt_insn_get_image pt_insn_set_image)
 add_man_page_alias(3 pt_insn_get_image pt_blk_get_image)
 add_man_page_alias(3 pt_insn_get_image pt_blk_set_image)
 add_man_page_alias(3 pt_insn_next pt_insn)
+add_man_page_alias(3 pt_insn_attach_obsv pt_blk_attach_obsv)
 add_man_page_alias(3 pt_iscache_alloc pt_iscache_free)
 add_man_page_alias(3 pt_iscache_alloc pt_iscache_name)
 add_man_page_alias(3 pt_blk_alloc_decoder pt_blk_free_decoder)

@@ -2010,6 +2010,18 @@ extern pt_export int pt_insn_sync_backward(struct pt_insn_decoder *decoder);
 extern pt_export int pt_insn_sync_set(struct pt_insn_decoder *decoder,
 				      uint64_t offset);
 
+/** Attach a decode observer.
+ *
+ * Attaches \@obsv to \@decoder.
+ *
+ * Returns zero on success, a negative error code otherwise.
+ *
+ * Returns -pte_invalid if \@decoder or \@obsv is NULL.
+ * Returns -pte_invalid if \@obsv is already attached to \@decoder.
+ */
+extern pt_export int pt_insn_attach_obsv(struct pt_insn_decoder *decoder,
+					 struct pt_observer *obsv);
+
 /** Get the current decoder position.
  *
  * Fills the current \@decoder position into \@offset.
@@ -2287,6 +2299,18 @@ extern pt_export int pt_blk_sync_backward(struct pt_block_decoder *decoder);
  */
 extern pt_export int pt_blk_sync_set(struct pt_block_decoder *decoder,
 				     uint64_t offset);
+
+/** Attach a decode observer.
+ *
+ * Attaches \@obsv to \@decoder.
+ *
+ * Returns zero on success, a negative error code otherwise.
+ *
+ * Returns -pte_invalid if \@decoder or \@obsv is NULL.
+ * Returns -pte_invalid if \@obsv is already attached to \@decoder.
+ */
+extern pt_export int pt_blk_attach_obsv(struct pt_block_decoder *decoder,
+					struct pt_observer *obsv);
 
 /** Get the current decoder position.
  *
