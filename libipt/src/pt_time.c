@@ -27,6 +27,7 @@
  */
 
 #include "pt_time.h"
+#include "pt_observer.h"
 
 #include "intel-pt.h"
 
@@ -40,6 +41,28 @@ void pt_time_init(struct pt_time *time)
 		return;
 
 	memset(time, 0, sizeof(*time));
+}
+
+void pt_time_fini(struct pt_time *time)
+{
+	if (!time)
+		return;
+
+	memset(time, 0, sizeof(*time));
+}
+
+void pt_time_reset(struct pt_time *time)
+{
+	struct pt_obsv_collection *obsvc;
+
+	if (!time)
+		return;
+
+	obsvc = time->obsvc;
+
+	pt_time_init(time);
+
+	time->obsvc = obsvc;
 }
 
 int pt_time_query_tsc(uint64_t *tsc, uint32_t *lost_mtc,
@@ -72,6 +95,45 @@ int pt_time_query_cbr(uint32_t *cbr, const struct pt_time *time)
 	*cbr = time->cbr;
 
 	return 0;
+}
+
+int pt_time_attach_obsvc(struct pt_time *time,
+			 struct pt_obsv_collection *obsvc)
+{
+	if (!time || !obsvc)
+		return -pte_internal;
+
+	if (time->obsvc)
+		return -pte_internal;
+
+	time->obsvc = obsvc;
+	return 0;
+}
+
+static int pt_time_tick(const struct pt_time *time)
+{
+	uint64_t tsc;
+	uint32_t lost_mtc, lost_cyc;
+	int errcode;
+
+	if (!time)
+		return -pte_internal;
+
+	if (!time->obsvc)
+		return 0;
+
+	errcode = pt_time_query_tsc(&tsc, &lost_mtc, &lost_cyc, time);
+	if (errcode < 0) {
+		/* One can argue whether sideband correlation with TSC
+		 * disabled makes sense.  Let's just ignore it, for now.
+		 */
+		if (errcode == -pte_no_time)
+			return 0;
+
+		return errcode;
+	}
+
+	return pt_obsvc_tick(time->obsvc, tsc, lost_mtc, lost_cyc);
 }
 
 /* Compute the distance between two CTC sources.
@@ -146,7 +208,7 @@ int pt_time_update_tsc(struct pt_time *time,
 	time->lost_mtc = 0;
 	time->lost_cyc = 0;
 
-	return 0;
+	return pt_time_tick(time);
 }
 
 int pt_time_update_cbr(struct pt_time *time,
@@ -328,7 +390,7 @@ int pt_time_update_mtc(struct pt_time *time,
 	base += tsc;
 	time->tsc = time->base = base;
 
-	return 0;
+	return pt_time_tick(time);
 }
 
 /* Adjust a CYC packet's payload spanning multiple MTC periods.
@@ -427,7 +489,7 @@ int pt_time_update_cyc(struct pt_time *time,
 	time->fc = fc;
 	time->tsc = time->base + fc;
 
-	return 0;
+	return pt_time_tick(time);
 }
 
 void pt_tcal_init(struct pt_time_cal *tcal)

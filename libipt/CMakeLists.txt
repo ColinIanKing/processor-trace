@@ -114,7 +114,7 @@ add_ptunit_std_test(tnt_cache)
 add_ptunit_std_test(retstack)
 add_ptunit_std_test(ild)
 add_ptunit_std_test(cpu)
-add_ptunit_std_test(time)
+add_ptunit_std_test(time src/pt_observer.c)
 add_ptunit_std_test(asid)
 add_ptunit_std_test(event_queue)
 add_ptunit_std_test(image src/pt_asid.c)
@@ -141,6 +141,7 @@ add_ptunit_c_test(query
   ${LIBIPT_SECTION_FILES}
   src/pt_time.c
   src/pt_block_cache.c
+  src/pt_observer.c
 )
 add_ptunit_c_test(section ${LIBIPT_SECTION_FILES})
 add_ptunit_c_test(section-file

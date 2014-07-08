@@ -27,6 +27,7 @@
  */
 
 #include "pt_time.h"
+#include "pt_observer.h"
 
 #include "intel-pt.h"
 
@@ -45,6 +46,15 @@ struct time_fixture {
 	/* The time struct to update. */
 	struct pt_time time;
 
+	/* A test observer. */
+	struct pt_observer obsv;
+
+	/* An obserer collection. */
+	struct pt_obsv_collection obsvc;
+
+	/* The number of observer calls. */
+	uint32_t obsv_calls;
+
 	/* The test fixture initialization and finalization functions. */
 	struct ptunit_result (*init)(struct time_fixture *);
 	struct ptunit_result (*fini)(struct time_fixture *);
@@ -61,11 +71,86 @@ static struct ptunit_result tfix_init(struct time_fixture *tfix)
 	pt_tcal_init(&tfix->tcal);
 	pt_tcal_set_fcr(&tfix->tcal, 0x2ull << pt_tcal_fcr_shr);
 
+	memset(&tfix->obsvc, 0xcd, sizeof(tfix->obsvc));
+	memset(&tfix->obsv, 0xcd, sizeof(tfix->obsv));
+
+	tfix->obsv_calls = 0;
+
 	pt_time_init(&tfix->time);
 
 	return ptu_passed();
 }
 
+static struct ptunit_result tfix_fini(struct time_fixture *tfix)
+{
+	pt_time_fini(&tfix->time);
+
+	return ptu_passed();
+}
+
+static int obsv_tick(struct pt_observer *obsv, uint64_t tsc, uint32_t lost_mtc,
+		     uint32_t lost_cyc)
+{
+	struct time_fixture *tfix;
+	uint64_t exp_tsc;
+	uint32_t exp_lost_mtc, exp_lost_cyc;
+	int errcode;
+
+	if (!obsv)
+		return -pte_invalid;
+
+	tfix = obsv->context;
+	if (!tfix)
+		return -pte_invalid;
+
+	tfix->obsv_calls += 1;
+
+	errcode = pt_time_query_tsc(&exp_tsc, &exp_lost_mtc, &exp_lost_cyc,
+				    &tfix->time);
+	if (errcode < 0)
+		return -pte_internal;
+
+	if (exp_tsc != tsc)
+		return -pte_internal;
+
+	if (exp_lost_mtc != lost_mtc)
+		return -pte_internal;
+
+	if (exp_lost_cyc != lost_cyc)
+		return -pte_internal;
+
+	return 0;
+}
+
+static struct ptunit_result tfix_obsv_init(struct time_fixture *tfix)
+{
+	int errcode;
+
+	ptu_check(tfix_init, tfix);
+
+	pt_obsv_init(&tfix->obsv);
+	pt_obsvc_init(&tfix->obsvc);
+
+	tfix->obsv.context = tfix;
+	tfix->obsv.tick.callback = obsv_tick;
+
+	errcode = pt_obsvc_add(&tfix->obsvc, &tfix->obsv);
+	ptu_int_eq(errcode, 0);
+
+	errcode = pt_time_attach_obsvc(&tfix->time, &tfix->obsvc);
+	ptu_int_eq(errcode, 0);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result tfix_obsv_fini(struct time_fixture *tfix)
+{
+	pt_obsvc_fini(&tfix->obsvc);
+
+	ptu_check(tfix_fini, tfix);
+
+	return ptu_passed();
+}
 
 static struct ptunit_result tsc_null(struct time_fixture *tfix)
 {
@@ -238,7 +323,7 @@ static struct ptunit_result tcal_cyc_null(struct time_fixture *tfix)
 	return ptu_passed();
 }
 
-static struct ptunit_result tsc(struct time_fixture *tfix)
+static struct ptunit_result tsc(struct time_fixture *tfix, uint32_t obsv_calls)
 {
 	struct pt_packet_tsc packet;
 	uint64_t tsc;
@@ -257,10 +342,12 @@ static struct ptunit_result tsc(struct time_fixture *tfix)
 	ptu_uint_eq(lost_mtc, 0);
 	ptu_uint_eq(lost_cyc, 0);
 
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
 	return ptu_passed();
 }
 
-static struct ptunit_result cbr(struct time_fixture *tfix)
+static struct ptunit_result cbr(struct time_fixture *tfix, uint32_t obsv_calls)
 {
 	struct pt_packet_cbr packet;
 	uint32_t cbr;
@@ -276,10 +363,12 @@ static struct ptunit_result cbr(struct time_fixture *tfix)
 
 	ptu_uint_eq(cbr, 0x38);
 
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
 	return ptu_passed();
 }
 
-static struct ptunit_result tma(struct time_fixture *tfix)
+static struct ptunit_result tma(struct time_fixture *tfix, uint32_t obsv_calls)
 {
 	struct pt_packet_tma packet;
 	int errcode;
@@ -290,10 +379,12 @@ static struct ptunit_result tma(struct time_fixture *tfix)
 	errcode = pt_time_update_tma(&tfix->time, &packet, &tfix->config);
 	ptu_int_eq(errcode, -pte_bad_context);
 
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
 	return ptu_passed();
 }
 
-static struct ptunit_result mtc(struct time_fixture *tfix)
+static struct ptunit_result mtc(struct time_fixture *tfix, uint32_t obsv_calls)
 {
 	struct pt_packet_mtc packet;
 	uint64_t tsc;
@@ -307,10 +398,12 @@ static struct ptunit_result mtc(struct time_fixture *tfix)
 	errcode = pt_time_query_tsc(&tsc, NULL, NULL, &tfix->time);
 	ptu_int_eq(errcode, -pte_no_time);
 
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
 	return ptu_passed();
 }
 
-static struct ptunit_result cyc(struct time_fixture *tfix)
+static struct ptunit_result cyc(struct time_fixture *tfix, uint32_t obsv_calls)
 {
 	struct pt_packet_cyc packet;
 	uint64_t fcr, tsc;
@@ -327,6 +420,41 @@ static struct ptunit_result cyc(struct time_fixture *tfix)
 	errcode = pt_time_query_tsc(&tsc, NULL, NULL, &tfix->time);
 	ptu_int_eq(errcode, -pte_no_time);
 
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result tsc_cyc(struct time_fixture *tfix,
+				    uint64_t fcr, uint32_t obsv_calls)
+{
+	struct pt_packet_tsc p_tsc;
+	struct pt_packet_cyc p_cyc;
+	uint64_t tsc;
+	uint32_t lost_mtc, lost_cyc;
+	int errcode;
+
+	p_tsc.tsc = 0xdedededeull;
+	p_cyc.value = 8ull;
+
+	errcode = pt_time_update_tsc(&tfix->time, &p_tsc, &tfix->config);
+	ptu_int_eq(errcode, 0);
+
+	errcode = pt_time_update_cyc(&tfix->time, &p_cyc, &tfix->config, fcr);
+	ptu_int_eq(errcode, 0);
+
+	errcode = pt_time_query_tsc(&tsc, &lost_mtc, &lost_cyc, &tfix->time);
+	ptu_int_eq(errcode, 0);
+
+	ptu_uint_eq(tsc, 0xdedededeull);
+	ptu_uint_eq(lost_mtc, 0);
+	if (fcr)
+		ptu_uint_eq(lost_cyc, 0);
+	else
+		ptu_uint_eq(lost_cyc, 1);
+
+	ptu_uint_eq(tfix->obsv_calls, obsv_calls);
+
 	return ptu_passed();
 }
 
@@ -334,12 +462,15 @@ static struct ptunit_result cyc(struct time_fixture *tfix)
 int main(int argc, char **argv)
 {
 	struct ptunit_suite suite;
-	struct time_fixture tfix;
+	struct time_fixture tfix, ofix;
 
 	suite = ptunit_mk_suite(argc, argv);
 
 	tfix.init = tfix_init;
-	tfix.fini = NULL;
+	tfix.fini = tfix_fini;
+
+	ofix.init = tfix_obsv_init;
+	ofix.fini = tfix_obsv_fini;
 
 	ptu_run_f(suite, tsc_null, tfix);
 	ptu_run_f(suite, cbr_null, tfix);
@@ -356,13 +487,19 @@ int main(int argc, char **argv)
 	ptu_run_f(suite, tcal_mtc_null, tfix);
 	ptu_run_f(suite, tcal_cyc_null, tfix);
 
-	ptu_run_f(suite, tsc, tfix);
-	ptu_run_f(suite, cbr, tfix);
-	ptu_run_f(suite, tma, tfix);
-	ptu_run_f(suite, mtc, tfix);
-	ptu_run_f(suite, cyc, tfix);
+	ptu_run_fp(suite, tsc, tfix, 0);
+	ptu_run_fp(suite, cbr, tfix, 0);
+	ptu_run_fp(suite, tma, tfix, 0);
+	ptu_run_fp(suite, mtc, tfix, 0);
+	ptu_run_fp(suite, cyc, tfix, 0);
 
 	/* The bulk is covered in ptt tests. */
+
+	ptu_run_fp(suite, tsc, ofix, 1);
+	ptu_run_fp(suite, tsc_cyc, ofix, 0ull, 1);
+	ptu_run_fp(suite, tsc_cyc, ofix, 1ull, 2);
+
+	ptu_run_fp(suite, cbr, ofix, 0);
 
 	ptunit_report(&suite);
 	return suite.nr_fails;

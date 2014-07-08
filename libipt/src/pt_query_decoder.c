@@ -124,9 +124,10 @@ struct pt_query_decoder *pt_qry_alloc_decoder(const struct pt_config *config)
 
 void pt_qry_decoder_fini(struct pt_query_decoder *decoder)
 {
-	(void) decoder;
+	if (!decoder)
+		return;
 
-	/* Nothing to do. */
+	pt_time_fini(&decoder->time);
 }
 
 void pt_qry_free_decoder(struct pt_query_decoder *decoder)
@@ -146,7 +147,7 @@ static void pt_qry_reset(struct pt_query_decoder *decoder)
 
 	pt_last_ip_init(&decoder->ip);
 	pt_tnt_cache_init(&decoder->tnt);
-	pt_time_init(&decoder->time);
+	pt_time_reset(&decoder->time);
 	pt_tcal_init(&decoder->tcal);
 	pt_evq_init(&decoder->evq);
 }

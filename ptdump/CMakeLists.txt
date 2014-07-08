@@ -34,6 +34,7 @@ set(PTDUMP_FILES
   ../libipt/src/pt_last_ip.c
   ../libipt/src/pt_cpu.c
   ../libipt/src/pt_time.c
+  ../libipt/src/pt_observer.c
 )
 
 if (CMAKE_HOST_UNIX)

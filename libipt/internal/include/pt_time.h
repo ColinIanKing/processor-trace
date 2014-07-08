@@ -37,10 +37,14 @@ struct pt_packet_cbr;
 struct pt_packet_tma;
 struct pt_packet_mtc;
 struct pt_packet_cyc;
+struct pt_obsv_collection;
 
 
 /* Intel(R) Processor Trace timing. */
 struct pt_time {
+	/* An optional observer collection to be notified of time changes. */
+	struct pt_obsv_collection *obsvc;
+
 	/* The estimated Time Stamp Count. */
 	uint64_t tsc;
 
@@ -78,8 +82,23 @@ struct pt_time {
 	uint32_t have_mtc:1;
 };
 
-/* Initialize (or reset) the time. */
+/* Initialize the time - detaches the observer. */
 extern void pt_time_init(struct pt_time *time);
+
+/* Finalize the time - does not finalize the observer. */
+extern void pt_time_fini(struct pt_time *time);
+
+/* Reset the time - keep observer. */
+extern void pt_time_reset(struct pt_time *time);
+
+/* Attach an observer collection.
+ *
+ * Returns zero on success, a negative error code otherwise.
+ * Returns -pte_internal if @time or @obsvc is NULL.
+ * Returns -pte_internal if there is alread an observer collection attached.
+ */
+extern int pt_time_attach_obsvc(struct pt_time *time,
+				struct pt_obsv_collection *obsvc);
 
 /* Query the current time.
  *
