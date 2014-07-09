@@ -138,13 +138,42 @@ run-ptt-test() {
 
 
 	# execute pttc
-	exps=`run $pttc_cmd $cpu $ptt`
+	files=`run $pttc_cmd $cpu $ptt`
 	ret=$?
 	if [[ $ret != 0 ]]; then
 		echo "$ptt: $pttc_cmd failed with $ret" >&2
 		status=1
 		continue
-	elif [[ -z $exps ]]; then
+	fi
+
+	exps=""
+	sb=""
+	for file in $files; do
+		case $file in
+		*.sb)
+			sb_base=${file%.sb}
+			sb_part=${sb_base#$base-}
+			sb_prefix=${sb_part%%,*}
+			sb_options=${sb_part#$sb_prefix}
+			sb_prio=${sb_prefix##*-}
+			sb_prefix2=${sb_prefix%-$sb_prio}
+			sb_format=${sb_prefix2##*-}
+
+			sb+=`echo $sb_options | sed -e "s/,/ --$sb_format:/g" -e "s/=/ /g"`
+			sb+=" --$sb_format:$sb_prio $file"
+			;;
+		*.exp)
+			exps+=" $file"
+			;;
+		*)
+			echo "$file: unknown file type"
+			status=1
+			return
+			;;
+		esac
+	done
+
+	if [[ -z $exps ]]; then
 		echo "$ptt: $pttc_cmd did not produce any .exp file" >&2
 		status=1
 		continue
@@ -168,11 +197,11 @@ run-ptt-test() {
 				continue
 			fi
 			local opts=`ptt-ptxed-opts $ptt`
-			run $ptxed_cmd --raw $bin:$addr $cpu $opts --pt $pt --no-inst > $out
+			run $ptxed_cmd --raw $bin:$addr $cpu $opts --pt $pt $sb --no-inst > $out
 			;;
 		ptdump)
 			local opts=`ptt-ptdump-opts $ptt`
-			run $ptdump_cmd $cpu $opts $pt > $out
+			run $ptdump_cmd $cpu $opts $sb $pt > $out
 			;;
 		*)
 			echo "$ptt: unknown tool $tool"
