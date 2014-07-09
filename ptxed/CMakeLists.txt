@@ -62,11 +62,19 @@ if (FEATURE_ELF)
   set(PTXED_FILES ${PTXED_FILES} src/load_elf.c)
 endif (FEATURE_ELF)
 
+if (PEVENT)
+  set(PTXED_FILES ${PTXED_FILES} src/ptxed_pevent.c)
+endif (PEVENT)
+
 add_executable(ptxed
   ${PTXED_FILES}
 )
 target_link_libraries(ptxed libipt)
 target_link_libraries(ptxed xed)
+
+if (PEVENT)
+  target_link_libraries(ptxed pevent)
+endif (PEVENT)
 
 if (CMAKE_HOST_WIN32)
   # suppress warnings from XED header files
