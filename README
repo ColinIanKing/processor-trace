@@ -33,6 +33,8 @@ Optional Contents and Samples
 
   ptunit        A simple unit test system
 
+  pevent        A library for reading/writing Linux perf event records
+
   script        A collection of scripts
 
   test          A collection of tests

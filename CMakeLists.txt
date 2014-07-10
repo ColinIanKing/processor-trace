@@ -72,6 +72,7 @@ option(PTXED  "Enable ptxed, an instruction flow dumper")
 option(PTTC   "Enable pttc, a test compiler")
 option(PTUNIT "Enable ptunit, a unit test system and libipt unit tests")
 option(MAN "Enable man pages (requires pandoc)." OFF)
+option(PEVENT "Enable pevent, a perf_event decoder library and perf_event sideband support.")
 
 # PTT tests require all the optional tools and use a bash script as test driver
 #
@@ -94,6 +95,13 @@ if (PTUNIT)
     ptunit/include
   )
 endif (PTUNIT)
+
+if (PEVENT)
+  include_directories(
+    pevent/include
+  )
+  add_definitions(-DFEATURE_PEVENT)
+endif (PEVENT)
 
 if (CMAKE_HOST_WIN32)
   include_directories(
@@ -262,3 +270,6 @@ endif (PTT)
 if (MAN)
   add_subdirectory(doc/man)
 endif (MAN)
+if (PEVENT)
+  add_subdirectory(pevent)
+endif (PEVENT)

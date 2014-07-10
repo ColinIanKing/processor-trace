@@ -57,6 +57,11 @@ The following optional components are availble:
 
     PTTC               A trace test generator.
 
+    PEVENT             A Linux perf_event decoder library.
+                       Support for the Linux perf_event sideband format.
+
+                       This feature requires the linux/perf_event.h header.
+
 
 ### Optional Features
 
