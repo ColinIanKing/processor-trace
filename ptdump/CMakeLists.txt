@@ -45,8 +45,16 @@ if (CMAKE_HOST_WIN32)
   set(PTDUMP_FILES ${PTDUMP_FILES} ../libipt/src/windows/pt_cpuid.c)
 endif (CMAKE_HOST_WIN32)
 
+if (PEVENT)
+  set(PTDUMP_FILES ${PTDUMP_FILES} src/ptdump_pevent.c)
+endif (PEVENT)
+
 add_executable(ptdump
   ${PTDUMP_FILES}
 )
 
 target_link_libraries(ptdump libipt)
+
+if (PEVENT)
+  target_link_libraries(ptdump pevent)
+endif (PEVENT)
