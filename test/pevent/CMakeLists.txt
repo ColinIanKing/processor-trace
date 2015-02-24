@@ -24,19 +24,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-function(add_ptt_test name)
-  set(pttc   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pttc)
-  set(ptdump ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ptdump)
-  set(ptxed  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ptxed)
-  set(script ${CMAKE_SOURCE_DIR}/script/test.bash)
-  set(test   ${CMAKE_CURRENT_SOURCE_DIR}/src/${name})
-
-  add_test(
-    NAME ${name}
-    COMMAND ${script} -f -g ${pttc} -d ${ptdump} -x ${ptxed} ${test}
-  )
-endfunction(add_ptt_test)
-
 file(GLOB TESTS
   LIST_DIRECTORIES false
   RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/src/
@@ -46,7 +33,3 @@ file(GLOB TESTS
 foreach (test ${TESTS})
   add_ptt_test(${test})
 endforeach ()
-
-if (PEVENT)
-  add_subdirectory(pevent)
-endif (PEVENT)
