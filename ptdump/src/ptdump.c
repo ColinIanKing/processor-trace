@@ -29,6 +29,7 @@
 #include "pt_cpu.h"
 #include "pt_last_ip.h"
 #include "pt_time.h"
+#include "pt_observer.h"
 
 #include "intel-pt.h"
 
@@ -131,6 +132,9 @@ struct ptdump_buffer {
 struct ptdump_tracking {
 	/* Track last-ip. */
 	struct pt_last_ip last_ip;
+
+	/* Observe time. */
+	struct pt_obsv_collection obsvc;
 
 	/* Track time calibration. */
 	struct pt_time_cal tcal;
@@ -432,12 +436,19 @@ static int diag(const char *errstr, uint64_t offset, int errcode)
 
 static void ptdump_tracking_init(struct ptdump_tracking *tracking)
 {
+	int errcode;
+
 	if (!tracking)
 		return;
 
 	pt_last_ip_init(&tracking->last_ip);
 	pt_tcal_init(&tracking->tcal);
 	pt_time_init(&tracking->time);
+	pt_obsvc_init(&tracking->obsvc);
+
+	errcode = pt_time_attach_obsvc(&tracking->time, &tracking->obsvc);
+	if (errcode < 0)
+		diag("failed to observe time", 0ull, errcode);
 
 	tracking->tsc = 0ull;
 	tracking->fcr = 0ull;
@@ -451,7 +462,7 @@ static void ptdump_tracking_reset(struct ptdump_tracking *tracking)
 
 	pt_last_ip_init(&tracking->last_ip);
 	pt_tcal_init(&tracking->tcal);
-	pt_time_init(&tracking->time);
+	pt_time_reset(&tracking->time);
 
 	tracking->tsc = 0ull;
 	tracking->fcr = 0ull;
@@ -460,9 +471,11 @@ static void ptdump_tracking_reset(struct ptdump_tracking *tracking)
 
 static void ptdump_tracking_fini(struct ptdump_tracking *tracking)
 {
-	(void) tracking;
+	if (!tracking)
+		return;
 
-	/* Nothing to do. */
+	pt_obsvc_fini(&tracking->obsvc);
+	pt_time_fini(&tracking->time);
 }
 
 #define print_field(field, ...)					\
@@ -1282,22 +1295,19 @@ static int dump_sync(struct pt_packet_decoder *decoder,
 	return errcode;
 }
 
-static int dump(const struct pt_config *config,
+static int dump(struct ptdump_tracking *tracking,
+		const struct pt_config *config,
 		const struct ptdump_options *options)
 {
 	struct pt_packet_decoder *decoder;
-	struct ptdump_tracking tracking;
 	int errcode;
 
 	decoder = pt_pkt_alloc_decoder(config);
 	if (!decoder)
 		return diag("failed to allocate decoder", 0ull, 0);
 
-	ptdump_tracking_init(&tracking);
+	errcode = dump_sync(decoder, tracking, options, config);
 
-	errcode = dump_sync(decoder, &tracking, options, config);
-
-	ptdump_tracking_fini(&tracking);
 	pt_pkt_free_decoder(decoder);
 	return errcode;
 }
@@ -1368,6 +1378,7 @@ static int get_arg_uint8(uint8_t *value, const char *option, const char *arg,
 
 int main(int argc, char *argv[])
 {
+	struct ptdump_tracking tracking;
 	struct ptdump_options options;
 	struct pt_config config;
 	int errcode, idx;
@@ -1381,6 +1392,8 @@ int main(int argc, char *argv[])
 
 	memset(&config, 0, sizeof(config));
 	pt_config_init(&config);
+
+	ptdump_tracking_init(&tracking);
 
 	for (idx = 1; idx < argc; ++idx) {
 		if (strncmp(argv[idx], "-", 1) != 0) {
@@ -1513,8 +1526,12 @@ int main(int argc, char *argv[])
 	if (errcode < 0)
 		return 1;
 
-	errcode = dump(&config, &options);
+	errcode = dump(&tracking, &config, &options);
 
+	/* Trigger the remaining observers. */
+	pt_obsvc_tick(&tracking.obsvc, UINT64_MAX, 0, 0);
+
+	ptdump_tracking_fini(&tracking);
 	free(config.begin);
 
 	return -errcode;
