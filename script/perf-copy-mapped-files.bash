@@ -30,16 +30,42 @@ set -e
 
 prog=`basename $0`
 
+outdir="."
+dryrun=0
+
 usage() {
     cat <<EOF
 usage: $prog [<options>] <perf.data-file>
 
-Scan the perf data file for MMAP records and print ptxed options for
-constructing a corresponding image.
+Scan the perf data file for MMAP records and copy the referenced files to the
+output directory set via the -o option.
+
+options:
+
+  -h        this text
+  -o <dir>  set the output directory to <dir> (default: $outdir)
+  -n        print commands instead of executing them
 
 <perf.data-file> defaults to perf.data.
 EOF
 }
+
+while getopts "ho:n" opt; do
+    case $opt in
+        h)
+            usage
+            exit 0
+            ;;
+        o)
+            outdir=$OPTARG
+            ;;
+        n)
+            dryrun=1
+            ;;
+    esac
+done
+
+shift $(($OPTIND-1))
 
 
 if [[ $# == 0 ]]; then
@@ -47,38 +73,64 @@ if [[ $# == 0 ]]; then
 elif [[ $# == 1 ]]; then
     file="$1"
     shift
-else
-    usage
+fi
+
+if [[ $# != 0 ]]; then
+    echo "$prog: unknown argument: $1.  use -h for help."
     exit 1
 fi
 
-
 perf script --no-itrace -i "$file" -D | gawk -F' ' -- '
-  function handle_mmap(file, vaddr) {
-    if (match(file, /\[.*\]/) != 0) {
-      # ignore 'virtual' file names like [kallsyms]
+    function run(cmd) {
+            if (dryrun != 0) {
+                printf("%s\n", cmd)
+            } else {
+                system(cmd)
+            }
     }
-    else if (match(file, /\.ko$/) != 0) {
-      # ignore kernel objects
-      #
-      # use /proc/kcore
+
+    function dirname(file) {
+        items = split(file, parts, "/", seps)
+
+        delete parts[items]
+
+        dname = ""
+        for (part in parts) {
+            dname = dname seps[part-1] parts[part]
+        }
+
+        return dname
     }
-    else {
-      printf(" --elf %s:0x%x", file, vaddr)
+
+    function handle_mmap(file) {
+        # ignore any non-absolute filename
+        #
+        # this covers pseudo-files like [kallsyms] or [vdso]
+        #
+        if (substr(file, 0, 1) != "/") {
+            return
+        }
+
+        # ignore kernel modules
+        #
+        # we rely on kcore
+        #
+        if (match(file, /\.ko$/) != 0) {
+            return
+        }
+
+        # ignore //anon
+        #
+        if (file == "//anon") {
+            return
+        }
+
+        dst = outdir file
+        dir = dirname(dst)
+
+        run("mkdir -p " dir)
+        run("cp " file " " dst)
     }
-  }
 
-  /PERF_RECORD_MMAP / {
-    vaddr = strtonum(substr($5, 2))
-    file = $9
-
-    handle_mmap(file, vaddr)
-  }
-
-  /PERF_RECORD_MMAP2 / {
-    vaddr = strtonum(substr($5, 2))
-    file = $12
-
-    handle_mmap(file, vaddr)
-  }
-'
+    /PERF_RECORD_MMAP/     { handle_mmap($NF) }
+' dryrun="$dryrun" outdir="$outdir"
