@@ -226,17 +226,22 @@ void pt_blk_free_decoder(struct pt_block_decoder *decoder)
 
 static int pt_blk_start(struct pt_block_decoder *decoder, int status)
 {
+	enum pt_decode_state state;
+
 	if (!decoder)
 		return -pte_internal;
 
 	if (status < 0)
 		return status;
 
-	decoder->status = status;
-	if (!(status & pts_ip_suppressed))
-		decoder->enabled = 1;
+	/* iP suppression determines the decode state. */
+	state = status & pts_ip_suppressed ? ptds_disabled : ptds_enabled;
 
-	return 0;
+	decoder->status = status;
+	decoder->enabled = state == ptds_enabled ? 1 : 0;
+
+	/* Notify our observers about the initial state. */
+	return pt_obsvc_state(&decoder->observers, state);
 }
 
 static int pt_blk_sync_reset(struct pt_block_decoder *decoder)
@@ -246,7 +251,8 @@ static int pt_blk_sync_reset(struct pt_block_decoder *decoder)
 
 	pt_blk_reset(decoder);
 
-	return 0;
+	/* Notify our observers about the synchronization reset. */
+	return pt_obsvc_state(&decoder->observers, ptds_unknown);
 }
 
 int pt_blk_sync_forward(struct pt_block_decoder *decoder)
@@ -554,6 +560,8 @@ static int pt_blk_process_enabled(struct pt_block_decoder *decoder,
 				  struct pt_block *block,
 				  const struct pt_event *ev)
 {
+	int errcode;
+
 	if (!decoder || !block || !ev)
 		return -pte_internal;
 
@@ -572,6 +580,11 @@ static int pt_blk_process_enabled(struct pt_block_decoder *decoder,
 	/* Delay processing of the event if the block is alredy in progress. */
 	if (!pt_blk_block_is_empty(block))
 		return 0;
+
+	/* Notify our observers about the change. */
+	errcode = pt_obsvc_state(&decoder->observers, ptds_enabled);
+	if (errcode < 0)
+		return errcode;
 
 	/* Check if we resumed from a preceding disable or if we enabled at a
 	 * different position.
@@ -603,6 +616,8 @@ static int pt_blk_apply_disabled(struct pt_block_decoder *decoder,
 				 struct pt_block *block,
 				 const struct pt_event *ev)
 {
+	int errcode;
+
 	if (!decoder || !block || !ev)
 		return -pte_internal;
 
@@ -613,6 +628,11 @@ static int pt_blk_apply_disabled(struct pt_block_decoder *decoder,
 	/* We must currently be enabled. */
 	if (!decoder->enabled)
 		return -pte_bad_context;
+
+	/* Notify our observers about the change. */
+	errcode = pt_obsvc_state(&decoder->observers, ptds_disabled);
+	if (errcode < 0)
+		return errcode;
 
 	/* We preserve @decoder->ip.  This is where we expect tracing to resume
 	 * and we'll indicate that on the subsequent enabled event if tracing
@@ -788,6 +808,8 @@ static int pt_blk_process_overflow(struct pt_block_decoder *decoder,
 				   struct pt_block *block,
 				   const struct pt_event *ev)
 {
+	int errcode;
+
 	if (!decoder || !block || !ev)
 		return -pte_internal;
 
@@ -805,6 +827,11 @@ static int pt_blk_process_overflow(struct pt_block_decoder *decoder,
 	 * disabled.  Otherwise it resolved while tracing was enabled.
 	 */
 	if (ev->ip_suppressed) {
+		/* Notify our observers about the change. */
+		errcode = pt_obsvc_state(&decoder->observers, ptds_disabled);
+		if (errcode < 0)
+			return errcode;
+
 		/* Tracing is disabled.  It doesn't make sense to preserve the
 		 * previous IP.  This will just be misleading.  Even if tracing
 		 * had been disabled before, as well, we might have missed the
@@ -822,6 +849,11 @@ static int pt_blk_process_overflow(struct pt_block_decoder *decoder,
 		 */
 		block->resynced = 1;
 	} else {
+		/* Notify our observers about the change. */
+		errcode = pt_obsvc_state(&decoder->observers, ptds_enabled);
+		if (errcode < 0)
+			return errcode;
+
 		/* Tracing is enabled and we're at the IP at which the overflow
 		 * resolved.
 		 */

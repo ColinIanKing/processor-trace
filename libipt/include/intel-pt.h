@@ -501,6 +501,18 @@ extern pt_export const char *pt_errstr(enum pt_error_code);
 
 
 
+/* The Intel PT decode state. */
+enum pt_decode_state {
+	/* The decode state is not known. */
+	ptds_unknown,
+
+	/* Tracing is disabled. */
+	ptds_disabled,
+
+	/* Tracing is enabled. */
+	ptds_enabled
+};
+
 /** An Intel PT decode observer.
  *
  * An observer may be attached to an Intel PT decoder to observe and influence
@@ -543,6 +555,23 @@ struct pt_observer {
 		 */
 		uint64_t limit;
 	} tick;
+
+	/** An optional callback for decode state-based observation. */
+	struct {
+		/* PRIVATE: The next observer. */
+		struct pt_observer *next;
+
+		/** The callback function.
+		 *
+		 * If non-NULL, the callback will be called when the decode
+		 * state changes.
+		 *
+		 * It shall return zero on success; a negative pt_error_code
+		 * otherwise.
+		 */
+		int (*callback)(struct pt_observer *self,
+				enum pt_decode_state state);
+	} state;
 };
 
 /** Initialize an Intel PT decode observer. */

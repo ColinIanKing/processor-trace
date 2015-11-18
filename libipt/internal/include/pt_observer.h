@@ -42,6 +42,12 @@ struct pt_obsv_collection {
 		/* The smallest limit - UINT64_MAX if @obsv is NULL. */
 		uint64_t limit;
 	} tick;
+
+	/* Decode state-based observation. */
+	struct {
+		/* The state observer queue. */
+		struct pt_observer *obsv;
+	} state;
 };
 
 
@@ -78,6 +84,26 @@ static inline int pt_obsvc_tick(struct pt_obsv_collection *obsvc, uint64_t tsc,
 		return 0;
 
 	return pt_obsvc_notify_tick(obsvc, tsc, lost_mtc, lost_cyc);
+}
+
+/* Notify observers of a decode state change.
+ *
+ * Returns zero on success, a negative error code, otherwise.
+ * Returns -pte_internal if @obsvc is NULL.
+ */
+extern int pt_obsvc_notify_state(struct pt_obsv_collection *obsvc,
+				 enum pt_decode_state state);
+
+static inline int pt_obsvc_state(struct pt_obsv_collection *obsvc,
+				 enum pt_decode_state state)
+{
+	if (!obsvc)
+		return -pte_internal;
+
+	if (!obsvc->state.obsv)
+		return 0;
+
+	return pt_obsvc_notify_state(obsvc, state);
 }
 
 #endif /* PT_OBSERVER_H */

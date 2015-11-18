@@ -52,7 +52,35 @@ struct obsv_context {
 		/* The updated limit. */
 		uint64_t limit;
 	} tick;
+
+	/* The state configuration - not all fields are used by all callbacks. */
+	struct {
+		/* The last state. */
+		enum pt_decode_state last;
+
+		/* The updated callback. */
+		int (*callback)(struct pt_observer *, enum pt_decode_state);
+	} state;
 };
+
+/* Update the observer state based on its test observer context. */
+static int obsv_update(struct pt_observer *self)
+{
+	struct obsv_context *context;
+
+	if (!self)
+		return -pte_internal;
+
+	context = self->context;
+	if (!context)
+		return -pte_internal;
+
+	self->tick.callback = context->tick.callback;
+	self->tick.limit = context->tick.limit;
+	self->state.callback = context->state.callback;
+
+	return 0;
+}
 
 /* A test tick callback that remembers the last time. */
 static int obsv_tick(struct pt_observer *self, uint64_t tsc,
@@ -92,8 +120,19 @@ static int obsv_tick_fail(struct pt_observer *self, uint64_t tsc,
 static int obsv_tick_update(struct pt_observer *self, uint64_t tsc,
 			    uint32_t lost_mtc, uint32_t lost_cyc)
 {
-	struct obsv_context *context;
 	int errcode;
+
+	errcode = obsv_tick(self, tsc, lost_mtc, lost_cyc);
+	if (errcode < 0)
+		return errcode;
+
+	return obsv_update(self);
+}
+
+/* A test state callback that remembers the decode state. */
+static int obsv_state(struct pt_observer *self, enum pt_decode_state state)
+{
+	struct obsv_context *context;
 
 	if (!self)
 		return -pte_internal;
@@ -102,15 +141,35 @@ static int obsv_tick_update(struct pt_observer *self, uint64_t tsc,
 	if (!context)
 		return -pte_internal;
 
-	errcode = obsv_tick(self, tsc, lost_mtc, lost_cyc);
+	context->calls += 1;
+	context->state.last = state;
+
+	return 0;
+}
+
+/* A test state callback that fails. */
+static int obsv_state_fail(struct pt_observer *self, enum pt_decode_state state)
+{
+	int errcode;
+
+	errcode = obsv_state(self, state);
 	if (errcode < 0)
 		return errcode;
 
-	/* Update the configuration. */
-	self->tick.callback = context->tick.callback;
-	self->tick.limit = context->tick.limit;
+	return -pte_bad_config;
+}
 
-	return 0;
+/* A test state callback that updates the configuration. */
+static int obsv_state_update(struct pt_observer *self,
+			     enum pt_decode_state state)
+{
+	int errcode;
+
+	errcode = obsv_state(self, state);
+	if (errcode < 0)
+		return errcode;
+
+	return obsv_update(self);
 }
 
 /* A test fixture providing an observer collection and initialized observers. */
@@ -174,6 +233,7 @@ static struct ptunit_result obsv_init(void)
 	ptu_null(obsv.tick.next);
 	ptu_null((void *)(uintptr_t) obsv.tick.callback);
 	ptu_uint_eq(obsv.tick.limit, 0ull);
+	ptu_null((void *)(uintptr_t) obsv.state.callback);
 
 	return ptu_passed();
 }
@@ -196,6 +256,7 @@ static struct ptunit_result obsvc_init(struct obsv_fixture *ofix)
 {
 	ptu_null(ofix->obsvc.tick.obsv);
 	ptu_uint_eq(ofix->obsvc.tick.limit, UINT64_MAX);
+	ptu_null(ofix->obsvc.state.obsv);
 
 	return ptu_passed();
 }
@@ -228,10 +289,15 @@ static struct ptunit_result obsvc_add_twice(struct obsv_fixture *ofix)
 	int errcode;
 
 	ofix->obsv[0].tick.callback = obsv_tick;
+	ofix->obsv[1].state.callback = obsv_state;
 
 	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[1]);
 
 	errcode = pt_obsvc_add(&ofix->obsvc, &ofix->obsv[0]);
+	ptu_int_eq(errcode, -pte_invalid);
+
+	errcode = pt_obsvc_add(&ofix->obsvc, &ofix->obsv[1]);
 	ptu_int_eq(errcode, -pte_invalid);
 
 	return ptu_passed();
@@ -526,6 +592,298 @@ static struct ptunit_result obsvc_tick_update(struct obsv_fixture *ofix)
 	return ptu_passed();
 }
 
+static struct ptunit_result obsvc_tick_add_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->context[0].tick.callback = obsv_tick_update;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_tick_remove_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->obsv[0].state.callback = obsv_state;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_tick_move_to_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_fail(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_fail;
+	ofix->obsv[1].state.callback = obsv_state_fail;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[1]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, -pte_bad_config);
+	ptu_uint_eq(ofix->context[0].calls + ofix->context[1].calls, 1ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_remove(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->context[0].state.callback = NULL;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_add_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->context[0].state.callback = obsv_state;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_update_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->obsv[0].tick.callback = obsv_tick;
+	ofix->context[0].state.callback = obsv_state;
+	ofix->context[0].tick.callback = obsv_tick;
+	ofix->context[0].tick.limit = 3ull;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 3ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 4ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 3ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_remove_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->obsv[0].tick.callback = obsv_tick;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_move_to_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	return ptu_passed();
+}
+
 int main(int argc, char **argv)
 {
 	struct obsv_fixture ofix;
@@ -555,6 +913,17 @@ int main(int argc, char **argv)
 	ptu_run_f(suite, obsvc_tick_twice, ofix);
 	ptu_run_f(suite, obsvc_tick_remove, ofix);
 	ptu_run_f(suite, obsvc_tick_update, ofix);
+	ptu_run_f(suite, obsvc_tick_add_state, ofix);
+	ptu_run_f(suite, obsvc_tick_remove_state, ofix);
+	ptu_run_f(suite, obsvc_tick_move_to_state, ofix);
+
+	ptu_run_f(suite, obsvc_state, ofix);
+	ptu_run_f(suite, obsvc_state_fail, ofix);
+	ptu_run_f(suite, obsvc_state_remove, ofix);
+	ptu_run_f(suite, obsvc_state_add_tick, ofix);
+	ptu_run_f(suite, obsvc_state_remove_tick, ofix);
+	ptu_run_f(suite, obsvc_state_update_tick, ofix);
+	ptu_run_f(suite, obsvc_state_move_to_tick, ofix);
 
 	ptunit_report(&suite);
 	return suite.nr_fails;

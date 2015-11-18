@@ -121,28 +121,45 @@ void pt_insn_free_decoder(struct pt_insn_decoder *decoder)
 
 static int pt_insn_start(struct pt_insn_decoder *decoder, int status)
 {
+	enum pt_decode_state state;
+
 	if (!decoder)
 		return -pte_internal;
 
 	if (status < 0)
 		return status;
 
+	/* iP suppression determines the decode state. */
+	state = status & pts_ip_suppressed ? ptds_disabled : ptds_enabled;
+
 	decoder->status = status;
+	decoder->enabled = state == ptds_enabled ? 1 : 0;
 
-	if (!(status & pts_ip_suppressed))
-		decoder->enabled = 1;
+	/* Notify our observers about the initial state. */
+	return pt_obsvc_state(&decoder->observers, state);
+}
 
-	return 0;
+static int pt_insn_sync_reset(struct pt_insn_decoder *decoder)
+{
+	if (!decoder)
+		return -pte_internal;
+
+	pt_insn_reset(decoder);
+
+	/* Notify our observers about the synchronization reset. */
+	return pt_obsvc_state(&decoder->observers, ptds_unknown);
 }
 
 int pt_insn_sync_forward(struct pt_insn_decoder *decoder)
 {
-	int status;
+	int errcode, status;
 
 	if (!decoder)
 		return -pte_invalid;
 
-	pt_insn_reset(decoder);
+	errcode = pt_insn_sync_reset(decoder);
+	if (errcode < 0)
+		return errcode;
 
 	status = pt_qry_sync_forward(&decoder->query, &decoder->ip);
 
@@ -151,12 +168,14 @@ int pt_insn_sync_forward(struct pt_insn_decoder *decoder)
 
 int pt_insn_sync_backward(struct pt_insn_decoder *decoder)
 {
-	int status;
+	int errcode, status;
 
 	if (!decoder)
 		return -pte_invalid;
 
-	pt_insn_reset(decoder);
+	errcode = pt_insn_sync_reset(decoder);
+	if (errcode < 0)
+		return errcode;
 
 	status = pt_qry_sync_backward(&decoder->query, &decoder->ip);
 
@@ -165,12 +184,14 @@ int pt_insn_sync_backward(struct pt_insn_decoder *decoder)
 
 int pt_insn_sync_set(struct pt_insn_decoder *decoder, uint64_t offset)
 {
-	int status;
+	int errcode, status;
 
 	if (!decoder)
 		return -pte_invalid;
 
-	pt_insn_reset(decoder);
+	errcode = pt_insn_sync_reset(decoder);
+	if (errcode < 0)
+		return errcode;
 
 	status = pt_qry_sync_set(&decoder->query, &decoder->ip, offset);
 
@@ -277,6 +298,7 @@ static int process_enabled_event(struct pt_insn_decoder *decoder,
 				 struct pt_insn *insn)
 {
 	struct pt_event *ev;
+	int errcode;
 
 	if (!decoder || !insn)
 		return -pte_internal;
@@ -298,6 +320,11 @@ static int process_enabled_event(struct pt_insn_decoder *decoder,
 	/* Delay processing of the event if we can't change the IP. */
 	if (!decoder->event_may_change_ip)
 		return 0;
+
+	/* Notify our observers about the change. */
+	errcode = pt_obsvc_state(&decoder->observers, ptds_enabled);
+	if (errcode < 0)
+		return errcode;
 
 	decoder->ip = ev->variant.enabled.ip;
 	decoder->enabled = 1;
@@ -325,6 +352,7 @@ static int process_disabled_event(struct pt_insn_decoder *decoder,
 				  struct pt_insn *insn)
 {
 	struct pt_event *ev;
+	int errcode;
 
 	if (!decoder || !insn)
 		return -pte_internal;
@@ -338,6 +366,11 @@ static int process_disabled_event(struct pt_insn_decoder *decoder,
 	/* We must currently be enabled. */
 	if (!decoder->enabled)
 		return -pte_bad_context;
+
+	/* Notify our observers about the change. */
+	errcode = pt_obsvc_state(&decoder->observers, ptds_disabled);
+	if (errcode < 0)
+		return errcode;
 
 	decoder->enabled = 0;
 	insn->disabled = 1;
@@ -439,6 +472,7 @@ static int process_overflow_event(struct pt_insn_decoder *decoder,
 				  struct pt_insn *insn)
 {
 	struct pt_event *ev;
+	int errcode;
 
 	if (!decoder || !insn)
 		return -pte_internal;
@@ -476,12 +510,22 @@ static int process_overflow_event(struct pt_insn_decoder *decoder,
 			 */
 			insn->resynced = 1;
 		}
+
+		/* Notify our observers about the change. */
+		errcode = pt_obsvc_state(&decoder->observers, ptds_disabled);
+		if (errcode < 0)
+			return errcode;
 	} else {
 		/* Jump to the IP at which the overflow was resolved. */
 		decoder->ip = ev->variant.overflow.ip;
 		decoder->enabled = 1;
 
 		insn->resynced = 1;
+
+		/* Notify our observers about the change. */
+		errcode = pt_obsvc_state(&decoder->observers, ptds_enabled);
+		if (errcode < 0)
+			return errcode;
 	}
 
 	return 1;

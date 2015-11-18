@@ -90,6 +90,23 @@ struct pt_observer {
          */
         uint64_t limit;
     } tick;
+
+    /** An optional callback for decode state-based observation. */
+    struct {
+        /* PRIVATE: The next observer. */
+        struct pt_observer *next;
+
+        /** The callback function.
+         *
+         * If non-NULL, the callback will be called when the decode
+         * state changes.
+         *
+         * It shall return zero on success; a negative pt_error_code
+         * otherwise.
+         */
+        int (*callback)(struct pt_observer *self,
+                enum pt_decode_state state);
+    } state;
 };
 ~~~
 

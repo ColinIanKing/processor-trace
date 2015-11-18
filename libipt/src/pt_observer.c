@@ -60,6 +60,21 @@ static int pt_obsvc_on_tick(struct pt_obsv_collection *obsvc,
 	return 0;
 }
 
+static int pt_obsvc_on_state(struct pt_obsv_collection *obsvc,
+			     struct pt_observer *obsv)
+{
+	struct pt_observer *next;
+
+	if (!obsvc || !obsv)
+		return -pte_internal;
+
+	for (next = obsvc->state.obsv; next; next = next->state.next)
+		if (next == obsv)
+			return 1;
+
+	return 0;
+}
+
 static struct pt_observer *pt_obsvc_postpone_tick(struct pt_observer *obsv)
 {
 	struct pt_observer *root, **pnext, *next;
@@ -108,6 +123,69 @@ static int pt_obsvc_add_tick(struct pt_obsv_collection *obsvc,
 	return 0;
 }
 
+static int pt_obsvc_remove_tick(struct pt_obsv_collection *obsvc,
+				struct pt_observer *obsv)
+{
+	struct pt_observer **pnext, *next;
+
+	if (!obsv)
+		return -pte_internal;
+
+	pnext = &obsvc->tick.obsv;
+	for (next = *pnext; next; next = *pnext) {
+		if (next == obsv) {
+			*pnext = next->tick.next;
+			break;
+		}
+
+		pnext = &next->tick.next;
+	}
+
+	next = obsvc->tick.obsv;
+	obsvc->tick.limit = next ? next->tick.limit : UINT64_MAX;
+
+	return 0;
+}
+
+static int pt_obsvc_add_state(struct pt_obsv_collection *obsvc,
+			      struct pt_observer *obsv)
+{
+	if (!obsvc || !obsv)
+		return -pte_internal;
+
+	if (!obsv->state.callback)
+		return -pte_invalid;
+
+	if (obsv->state.next)
+		return -pte_invalid;
+
+	obsv->state.next = obsvc->state.obsv;
+	obsvc->state.obsv = obsv;
+
+	return 0;
+}
+
+static int pt_obsvc_remove_state(struct pt_obsv_collection *obsvc,
+				 struct pt_observer *obsv)
+{
+	struct pt_observer **pnext, *next;
+
+	if (!obsv)
+		return -pte_internal;
+
+	pnext = &obsvc->state.obsv;
+	for (next = *pnext; next; next = *pnext) {
+		if (next == obsv) {
+			*pnext = next->state.next;
+			break;
+		}
+
+		pnext = &next->state.next;
+	}
+
+	return 0;
+}
+
 int pt_obsvc_add(struct pt_obsv_collection *obsvc, struct pt_observer *obsv)
 {
 	int errcode;
@@ -118,13 +196,73 @@ int pt_obsvc_add(struct pt_obsv_collection *obsvc, struct pt_observer *obsv)
 	if (!obsv)
 		return -pte_invalid;
 
-	if (pt_obsvc_on_tick(obsvc, obsv))
+	if (pt_obsvc_on_tick(obsvc, obsv) || pt_obsvc_on_state(obsvc, obsv))
 		return -pte_invalid;
 
 	if (obsv->tick.callback) {
 		errcode = pt_obsvc_add_tick(obsvc, obsv);
 		if (errcode < 0)
 			return errcode;
+	}
+
+	if (obsv->state.callback) {
+		errcode = pt_obsvc_add_state(obsvc, obsv);
+		if (errcode < 0)
+			return errcode;
+	}
+
+	return 0;
+}
+
+/* Update the tick chain of @obsv in @obsvc after a non-tick update.
+ *
+ * The state of @obsv prior to the callback is stored in @prev.
+ */
+static int pt_obsvc_update_tick(struct pt_obsv_collection *obsvc,
+				struct pt_observer *obsv,
+				const struct pt_observer *prev)
+{
+	if (!obsv || !prev)
+		return -pte_internal;
+
+	if (obsv->tick.callback) {
+		if (!prev->tick.callback)
+			return pt_obsvc_add_tick(obsvc, obsv);
+
+		if (obsv->tick.limit != prev->tick.limit) {
+			int errcode;
+
+			errcode = pt_obsvc_remove_tick(obsvc, obsv);
+			if (errcode < 0)
+				return errcode;
+
+			return pt_obsvc_add_tick(obsvc, obsv);
+		}
+	} else {
+		if (prev->tick.callback)
+			return pt_obsvc_remove_tick(obsvc, obsv);
+	}
+
+	return 0;
+}
+
+/* Update the state chain of @obsv in @obsvc after a non-state update.
+ *
+ * The state of @obsv prior to the callback is stored in @prev.
+ */
+static int pt_obsvc_update_state(struct pt_obsv_collection *obsvc,
+				 struct pt_observer *obsv,
+				 const struct pt_observer *prev)
+{
+	if (!obsv || !prev)
+		return -pte_internal;
+
+	if (obsv->state.callback) {
+		if (!prev->state.callback)
+			return pt_obsvc_add_state(obsvc, obsv);
+	} else {
+		if (prev->state.callback)
+			return pt_obsvc_remove_state(obsvc, obsv);
 	}
 
 	return 0;
@@ -148,6 +286,7 @@ int pt_obsvc_notify_tick(struct pt_obsv_collection *obsvc, uint64_t tsc,
 	pnext = &obsvc->tick.obsv;
 	for (next = *pnext; next; next = *pnext) {
 		struct pt_observer current, *update;
+		int errupd;
 
 		/* Observers are supposed to unsubscribe themselves only
 		 * during a callback call.
@@ -207,7 +346,17 @@ int pt_obsvc_notify_tick(struct pt_obsv_collection *obsvc, uint64_t tsc,
 			pnext = &next->tick.next;
 		}
 
-		/* Report errors from the current observer. */
+		/* Apply state configuration changes before reporting callback
+		 * errors so we don't end up with an inconsistent state in case
+		 * of errors.
+		 */
+		errupd = pt_obsvc_update_state(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
+		/* Any error aborts the traversal after completing the current
+		 * observer.
+		 */
 		if (errcode < 0)
 			break;
 	}
@@ -236,6 +385,66 @@ int pt_obsvc_notify_tick(struct pt_obsv_collection *obsvc, uint64_t tsc,
 		obsvc->tick.limit = next->tick.limit;
 	else
 		obsvc->tick.limit = UINT64_MAX;
+
+	return errcode;
+}
+
+int pt_obsvc_notify_state(struct pt_obsv_collection *obsvc,
+			  enum pt_decode_state state)
+{
+	struct pt_observer **pnext, *next;
+	int errcode;
+
+	if (!obsvc)
+		return -pte_internal;
+
+	errcode = 0;
+
+	pnext = &obsvc->state.obsv;
+	for (next = *pnext; next; next = *pnext) {
+		struct pt_observer current;
+		int errupd;
+
+		/* Observers are supposed to unsubscribe themselves only
+		 * during a callback call.
+		 *
+		 * We have no means to enforce this, though, so let's check.
+		 */
+		if (!next->state.callback)
+			return -pte_invalid;
+
+		/* Copy the current observer so we know what changed. */
+		current = *next;
+
+		/* We delay processing of observer errors to handle an
+		 * additional configuration change.
+		 */
+		errcode = current.state.callback(next, state);
+
+		/* Check if the observer's configuration changed. */
+		if (!next->state.callback) {
+			/* It unsubscribed - remove it from the list. */
+			next->state.next = NULL;
+			*pnext = current.state.next;
+		} else {
+			/* No change that would affect this traversal. */
+			pnext = &next->state.next;
+		}
+
+		/* Apply state configuration changes before reporting callback
+		 * errors so we don't end up with an inconsistent state in case
+		 * of errors.
+		 */
+		errupd = pt_obsvc_update_tick(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
+		/* Any error aborts the traversal after completing the current
+		 * observer.
+		 */
+		if (errcode < 0)
+			break;
+	}
 
 	return errcode;
 }
