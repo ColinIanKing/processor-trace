@@ -75,6 +75,21 @@ static int pt_obsvc_on_state(struct pt_obsv_collection *obsvc,
 	return 0;
 }
 
+static int pt_obsvc_on_ip(struct pt_obsv_collection *obsvc,
+			  struct pt_observer *obsv)
+{
+	struct pt_observer *next;
+
+	if (!obsvc || !obsv)
+		return -pte_internal;
+
+	for (next = obsvc->ip.obsv; next; next = next->ip.next)
+		if (next == obsv)
+			return 1;
+
+	return 0;
+}
+
 static struct pt_observer *pt_obsvc_postpone_tick(struct pt_observer *obsv)
 {
 	struct pt_observer *root, **pnext, *next;
@@ -186,6 +201,45 @@ static int pt_obsvc_remove_state(struct pt_obsv_collection *obsvc,
 	return 0;
 }
 
+static int pt_obsvc_add_ip(struct pt_obsv_collection *obsvc,
+			   struct pt_observer *obsv)
+{
+	if (!obsvc || !obsv)
+		return -pte_internal;
+
+	if (!obsv->ip.callback)
+		return -pte_invalid;
+
+	if (obsv->ip.next)
+		return -pte_invalid;
+
+	obsv->ip.next = obsvc->ip.obsv;
+	obsvc->ip.obsv = obsv;
+
+	return 0;
+}
+
+static int pt_obsvc_remove_ip(struct pt_obsv_collection *obsvc,
+			      struct pt_observer *obsv)
+{
+	struct pt_observer **pnext, *next;
+
+	if (!obsv)
+		return -pte_internal;
+
+	pnext = &obsvc->ip.obsv;
+	for (next = *pnext; next; next = *pnext) {
+		if (next == obsv) {
+			*pnext = next->ip.next;
+			break;
+		}
+
+		pnext = &next->ip.next;
+	}
+
+	return 0;
+}
+
 int pt_obsvc_add(struct pt_obsv_collection *obsvc, struct pt_observer *obsv)
 {
 	int errcode;
@@ -196,7 +250,8 @@ int pt_obsvc_add(struct pt_obsv_collection *obsvc, struct pt_observer *obsv)
 	if (!obsv)
 		return -pte_invalid;
 
-	if (pt_obsvc_on_tick(obsvc, obsv) || pt_obsvc_on_state(obsvc, obsv))
+	if (pt_obsvc_on_tick(obsvc, obsv) || pt_obsvc_on_state(obsvc, obsv) ||
+	    pt_obsvc_on_ip(obsvc, obsv))
 		return -pte_invalid;
 
 	if (obsv->tick.callback) {
@@ -207,6 +262,12 @@ int pt_obsvc_add(struct pt_obsv_collection *obsvc, struct pt_observer *obsv)
 
 	if (obsv->state.callback) {
 		errcode = pt_obsvc_add_state(obsvc, obsv);
+		if (errcode < 0)
+			return errcode;
+	}
+
+	if (obsv->ip.callback) {
+		errcode = pt_obsvc_add_ip(obsvc, obsv);
 		if (errcode < 0)
 			return errcode;
 	}
@@ -263,6 +324,28 @@ static int pt_obsvc_update_state(struct pt_obsv_collection *obsvc,
 	} else {
 		if (prev->state.callback)
 			return pt_obsvc_remove_state(obsvc, obsv);
+	}
+
+	return 0;
+}
+
+/* Update the ip chain of @obsv in @obsvc after a non-ip update.
+ *
+ * The state of @obsv prior to the callback is stored in @prev.
+ */
+static int pt_obsvc_update_ip(struct pt_obsv_collection *obsvc,
+			      struct pt_observer *obsv,
+			      const struct pt_observer *prev)
+{
+	if (!obsv || !prev)
+		return -pte_internal;
+
+	if (obsv->ip.callback) {
+		if (!prev->ip.callback)
+			return pt_obsvc_add_ip(obsvc, obsv);
+	} else {
+		if (prev->ip.callback)
+			return pt_obsvc_remove_ip(obsvc, obsv);
 	}
 
 	return 0;
@@ -354,6 +437,10 @@ int pt_obsvc_notify_tick(struct pt_obsv_collection *obsvc, uint64_t tsc,
 		if (errupd < 0)
 			errcode = errupd;
 
+		errupd = pt_obsvc_update_ip(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
 		/* Any error aborts the traversal after completing the current
 		 * observer.
 		 */
@@ -436,6 +523,73 @@ int pt_obsvc_notify_state(struct pt_obsv_collection *obsvc,
 		 * of errors.
 		 */
 		errupd = pt_obsvc_update_tick(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
+		errupd = pt_obsvc_update_ip(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
+		/* Any error aborts the traversal after completing the current
+		 * observer.
+		 */
+		if (errcode < 0)
+			break;
+	}
+
+	return errcode;
+}
+
+int pt_obsvc_notify_ip(struct pt_obsv_collection *obsvc, uint64_t ip)
+{
+	struct pt_observer **pnext, *next;
+	int errcode;
+
+	if (!obsvc)
+		return -pte_internal;
+
+	errcode = 0;
+
+	pnext = &obsvc->ip.obsv;
+	for (next = *pnext; next; next = *pnext) {
+		struct pt_observer current;
+		int errupd;
+
+		/* Observers are supposed to unsubscribe themselves only
+		 * during a callback call.
+		 *
+		 * We have no means to enforce this, though, so let's check.
+		 */
+		if (!next->ip.callback)
+			return -pte_invalid;
+
+		/* Copy the current observer so we know what changed. */
+		current = *next;
+
+		/* We delay processing of observer errors to handle an
+		 * additional configuration change.
+		 */
+		errcode = current.ip.callback(next, ip);
+
+		/* Check if the observer's configuration changed. */
+		if (!next->ip.callback) {
+			/* It unsubscribed - remove it from the list. */
+			next->ip.next = NULL;
+			*pnext = current.ip.next;
+		} else {
+			/* No change that would affect this traversal. */
+			pnext = &next->ip.next;
+		}
+
+		/* Apply state configuration changes before reporting callback
+		 * errors so we don't end up with an inconsistent state in case
+		 * of errors.
+		 */
+		errupd = pt_obsvc_update_tick(obsvc, next, &current);
+		if (errupd < 0)
+			errcode = errupd;
+
+		errupd = pt_obsvc_update_state(obsvc, next, &current);
 		if (errupd < 0)
 			errcode = errupd;
 

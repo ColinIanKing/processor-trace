@@ -1192,6 +1192,11 @@ static int pt_blk_proceed_one_insn(struct pt_block_decoder *decoder,
 	if (status < 0)
 		return status;
 
+	/* Notify our observers about the new IP. */
+	status = pt_obsvc_ip(&decoder->observers, decoder->ip);
+	if (status < 0)
+		return status;
+
 	/* We have a new instruction. */
 	block->end_ip = insn.ip;
 	block->ninsn = ninsn;
@@ -2137,6 +2142,20 @@ static int pt_blk_proceed_no_event_cached(struct pt_block_decoder *decoder,
 	ninsn = binsn + (uint16_t) bce.ninsn;
 	if (ninsn < binsn)
 		return 0;
+
+	/* Notify our observers about a new IP.
+	 *
+	 * We're omitting notifications for intermediate IPs and we expect our
+	 * observers to be OK with that.
+	 *
+	 * Note that we send the notification for the IP at the current position
+	 * and not at the decision point.  We will thus get notifications for
+	 * the destinations of branches rather than for the branch instructions
+	 * themselves.  At least for calls this seems more useful.
+	 */
+	status = pt_obsvc_ip(&decoder->observers, decoder->ip);
+	if (status < 0)
+		return status;
 
 	/* Jump ahead to the decision point and proceed from there.
 	 *

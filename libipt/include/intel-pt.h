@@ -572,6 +572,29 @@ struct pt_observer {
 		int (*callback)(struct pt_observer *self,
 				enum pt_decode_state state);
 	} state;
+
+	/** An optional callback for instruction pointer-based observation. */
+	struct {
+		/* PRIVATE: The next observer. */
+		struct pt_observer *next;
+
+		/** The callback function.
+		 *
+		 * If non-NULL, the callback will be called for new instruction
+		 * addresses depending on the decoder.
+		 *
+		 * When attached to an instruction flow decoder, it will be
+		 * called for every instruction.
+		 *
+		 * When attached to a block decoder, it will be called once for
+		 * a block of instructions with the IP of the first instruction
+		 * in that block.
+		 *
+		 * It shall return zero on success; a negative pt_error_code
+		 * otherwise.
+		 */
+		int (*callback)(struct pt_observer *self, uint64_t ip);
+	} ip;
 };
 
 /** Initialize an Intel PT decode observer. */

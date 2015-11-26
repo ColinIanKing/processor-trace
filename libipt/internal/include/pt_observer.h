@@ -48,6 +48,12 @@ struct pt_obsv_collection {
 		/* The state observer queue. */
 		struct pt_observer *obsv;
 	} state;
+
+	/* Instruction Pointer-based observation. */
+	struct {
+		/* The ip observer queue. */
+		struct pt_observer *obsv;
+	} ip;
 };
 
 
@@ -104,6 +110,24 @@ static inline int pt_obsvc_state(struct pt_obsv_collection *obsvc,
 		return 0;
 
 	return pt_obsvc_notify_state(obsvc, state);
+}
+
+/* Notify observers of an instruction pointer change.
+ *
+ * Returns zero on success, a negative error code, otherwise.
+ * Returns -pte_internal if @obsvc is NULL.
+ */
+extern int pt_obsvc_notify_ip(struct pt_obsv_collection *obsvc, uint64_t ip);
+
+static inline int pt_obsvc_ip(struct pt_obsv_collection *obsvc, uint64_t ip)
+{
+	if (!obsvc)
+		return -pte_internal;
+
+	if (!obsvc->ip.obsv)
+		return 0;
+
+	return pt_obsvc_notify_ip(obsvc, ip);
 }
 
 #endif /* PT_OBSERVER_H */

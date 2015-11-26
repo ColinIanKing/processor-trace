@@ -61,6 +61,15 @@ struct obsv_context {
 		/* The updated callback. */
 		int (*callback)(struct pt_observer *, enum pt_decode_state);
 	} state;
+
+	/* The ip configuration - not all fields are used by all callbacks. */
+	struct {
+		/* The last IP. */
+		uint64_t last;
+
+		/* The updated callback. */
+		int (*callback)(struct pt_observer *, uint64_t);
+	} ip;
 };
 
 /* Update the observer state based on its test observer context. */
@@ -78,6 +87,7 @@ static int obsv_update(struct pt_observer *self)
 	self->tick.callback = context->tick.callback;
 	self->tick.limit = context->tick.limit;
 	self->state.callback = context->state.callback;
+	self->ip.callback = context->ip.callback;
 
 	return 0;
 }
@@ -172,6 +182,48 @@ static int obsv_state_update(struct pt_observer *self,
 	return obsv_update(self);
 }
 
+/* A test ip callback that remembers the last IP. */
+static int obsv_ip(struct pt_observer *self, uint64_t ip)
+{
+	struct obsv_context *context;
+
+	if (!self)
+		return -pte_internal;
+
+	context = self->context;
+	if (!context)
+		return -pte_internal;
+
+	context->calls += 1;
+	context->ip.last = ip;
+
+	return 0;
+}
+
+/* A test ip callback that fails. */
+static int obsv_ip_fail(struct pt_observer *self, uint64_t ip)
+{
+	int errcode;
+
+	errcode = obsv_ip(self, ip);
+	if (errcode < 0)
+		return errcode;
+
+	return -pte_bad_config;
+}
+
+/* A test ip callback that updates the configuration. */
+static int obsv_ip_update(struct pt_observer *self, uint64_t ip)
+{
+	int errcode;
+
+	errcode = obsv_ip(self, ip);
+	if (errcode < 0)
+		return errcode;
+
+	return obsv_update(self);
+}
+
 /* A test fixture providing an observer collection and initialized observers. */
 struct obsv_fixture {
 	/* An observer collection. */
@@ -234,6 +286,7 @@ static struct ptunit_result obsv_init(void)
 	ptu_null((void *)(uintptr_t) obsv.tick.callback);
 	ptu_uint_eq(obsv.tick.limit, 0ull);
 	ptu_null((void *)(uintptr_t) obsv.state.callback);
+	ptu_null((void *)(uintptr_t) obsv.ip.callback);
 
 	return ptu_passed();
 }
@@ -688,6 +741,102 @@ static struct ptunit_result obsvc_tick_move_to_state(struct obsv_fixture *ofix)
 	return ptu_passed();
 }
 
+static struct ptunit_result obsvc_tick_add_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->context[0].tick.callback = obsv_tick_update;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_tick_remove_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->obsv[0].ip.callback = obsv_ip;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_tick_move_to_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].tick.callback = obsv_tick_update;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	return ptu_passed();
+}
+
 static struct ptunit_result obsvc_state(struct obsv_fixture *ofix)
 {
 	int errcode;
@@ -884,6 +1033,394 @@ static struct ptunit_result obsvc_state_move_to_tick(struct obsv_fixture *ofix)
 	return ptu_passed();
 }
 
+static struct ptunit_result obsvc_state_add_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->context[0].state.callback = obsv_state;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_remove_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->obsv[0].ip.callback = obsv_ip;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_enabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_state_move_to_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].state.callback = obsv_state_update;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].state.last, ptds_disabled);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_fail(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_fail;
+	ofix->obsv[1].ip.callback = obsv_ip_fail;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[1]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, -pte_bad_config);
+	ptu_uint_eq(ofix->context[0].calls + ofix->context[1].calls, 1ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_remove(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->context[0].ip.callback = NULL;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_add_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->context[0].ip.callback = obsv_ip;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_update_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->obsv[0].tick.callback = obsv_tick;
+	ofix->context[0].ip.callback = obsv_ip;
+	ofix->context[0].tick.callback = obsv_tick;
+	ofix->context[0].tick.limit = 3ull;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 3ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 4ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 3ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_remove_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->obsv[0].tick.callback = obsv_tick;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 1ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_move_to_tick(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->context[0].tick.callback = obsv_tick;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 1ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_tick(&ofix->obsvc, 2ull, 0, 0);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].tick.last, 2ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_add_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->context[0].ip.callback = obsv_ip;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].state.last, ptds_enabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_remove_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->obsv[0].state.callback = obsv_state;
+	ofix->context[0].ip.callback = obsv_ip;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_uint_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].state.last, ptds_disabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 3ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa001ull);
+
+	return ptu_passed();
+}
+
+static struct ptunit_result obsvc_ip_move_to_state(struct obsv_fixture *ofix)
+{
+	int errcode;
+
+	ofix->obsv[0].ip.callback = obsv_ip_update;
+	ofix->context[0].state.callback = obsv_state;
+
+	ptu_check(ptu_obsvc_add, &ofix->obsvc, &ofix->obsv[0]);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_disabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 0ull);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa000ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 1ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	errcode = pt_obsvc_state(&ofix->obsvc, ptds_enabled);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_uint_eq(ofix->context[0].state.last, ptds_enabled);
+
+	errcode = pt_obsvc_ip(&ofix->obsvc, 0xa001ull);
+	ptu_int_eq(errcode, 0);
+	ptu_uint_eq(ofix->context[0].calls, 2ull);
+	ptu_int_eq(ofix->context[0].ip.last, 0xa000ull);
+
+	return ptu_passed();
+}
+
 int main(int argc, char **argv)
 {
 	struct obsv_fixture ofix;
@@ -916,6 +1453,9 @@ int main(int argc, char **argv)
 	ptu_run_f(suite, obsvc_tick_add_state, ofix);
 	ptu_run_f(suite, obsvc_tick_remove_state, ofix);
 	ptu_run_f(suite, obsvc_tick_move_to_state, ofix);
+	ptu_run_f(suite, obsvc_tick_add_ip, ofix);
+	ptu_run_f(suite, obsvc_tick_remove_ip, ofix);
+	ptu_run_f(suite, obsvc_tick_move_to_ip, ofix);
 
 	ptu_run_f(suite, obsvc_state, ofix);
 	ptu_run_f(suite, obsvc_state_fail, ofix);
@@ -924,6 +1464,20 @@ int main(int argc, char **argv)
 	ptu_run_f(suite, obsvc_state_remove_tick, ofix);
 	ptu_run_f(suite, obsvc_state_update_tick, ofix);
 	ptu_run_f(suite, obsvc_state_move_to_tick, ofix);
+	ptu_run_f(suite, obsvc_state_add_ip, ofix);
+	ptu_run_f(suite, obsvc_state_remove_ip, ofix);
+	ptu_run_f(suite, obsvc_state_move_to_ip, ofix);
+
+	ptu_run_f(suite, obsvc_ip, ofix);
+	ptu_run_f(suite, obsvc_ip_fail, ofix);
+	ptu_run_f(suite, obsvc_ip_remove, ofix);
+	ptu_run_f(suite, obsvc_ip_add_tick, ofix);
+	ptu_run_f(suite, obsvc_ip_remove_tick, ofix);
+	ptu_run_f(suite, obsvc_ip_update_tick, ofix);
+	ptu_run_f(suite, obsvc_ip_move_to_tick, ofix);
+	ptu_run_f(suite, obsvc_ip_add_state, ofix);
+	ptu_run_f(suite, obsvc_ip_remove_state, ofix);
+	ptu_run_f(suite, obsvc_ip_move_to_state, ofix);
 
 	ptunit_report(&suite);
 	return suite.nr_fails;

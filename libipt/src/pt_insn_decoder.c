@@ -1328,6 +1328,11 @@ int pt_insn_next(struct pt_insn_decoder *decoder, struct pt_insn *uinsn,
 	 */
 	decoder->event_may_change_ip = 0;
 
+	/* Notify our observers about the new IP. */
+	errcode = pt_obsvc_ip(&decoder->observers, decoder->ip);
+	if (errcode < 0)
+		goto err;
+
 	errcode = process_events_after(decoder, pinsn, &iext);
 	if (errcode < 0)
 		goto err;
